@@ -1,23 +1,41 @@
 from dataset_walker import dataset_walker
 from prettyPrint import prettyPrint
 
-import tensorflow as tf
+from keras.models import Sequential
+from keras.layers import LSTM, Dense, Activation
+from keras.preprocessing import sequence
 
 if __name__ == '__main__':
     dataset = dataset_walker("dstc2_dev", dataroot="data", labels=True)
 
     informable = ['area', 'food', 'name', 'pricerange']
     requestable = informable + ['addr', 'phone', 'postcode', 'signature']
+    machineActs = ['affirm', 'bye', 'canthear', 'confirm-domain', 'negate', 'repeat', 'reqmore',
+        'welcomemsg', 'canthelp', 'canthelp.missing_slot_value', 'canthelp.exception', 'expl-conf', 'impl-conf', 'inform',
+        'offer', 'request', 'select', 'welcomemsg']
+
+    userActs = ['ack', 'affirm', 'bye', 'hello', 'help', 'negate', 'null', 'repeat', 'reqalts',
+        'reqmore', 'restart', 'silence', 'thankyou', 'confirm', 'deny', 'inform', 'request']
+
+    inputShapeLen = 3 * len(informable) + len(requestable) + len(machineActs)
+    outputShapeLen = len(userActs)
+
+    X_train = []
+    y_train = []
+
+    contextHistory = []
 
     for call in dataset:
         print '\nLOG: ', call.log["session-id"], '\n'
-        
+
         constraintVector = [0] * len(informable)
         requestVector = [0] * len(requestable)
 
         constraintValues = [''] * len(informable)
 
         for turn, label in call:
+            machineActVector = [0] * len(machineActs)
+            userActVector = [0] * len(userActs)
             inconsistencyVector = [0] * (2 * len(informable))
 
             print '\n----'
@@ -27,6 +45,9 @@ if __name__ == '__main__':
 
             machineMentioned = []
             for act in turn['output']['dialog-acts']:
+                # Build machine act vector
+                machineActVector[machineActs.index(act['act'])] = 1
+
                 if act['act'] == 'inform':
                     for slot in act['slots']:
                         # If the machine misunderstood the user specified value for constraint, set it to 0
@@ -48,12 +69,21 @@ if __name__ == '__main__':
                     constraintVector[i] = 1
 
             print 'INCONSISTENCY: ', inconsistencyVector
+            print 'MACHINE: ', machineActVector
 
-            # --- DO TRAINING HERE ---
-            # This turn's machine response corresponds to last turns user action.
-            # So here, we have the correctly built inconsistency and constraint vectors.
+            # Build Context Vector - concatenate all vectors
+            contextVector = machineActVector + inconsistencyVector + constraintVector + requestVector
 
-            # ...
+            contextHistory.append(contextVector)
+            X_train.append(contextHistory)
+
+            # Encode User acts as one-hot encoding
+            for sem in label['semantics']['json']:
+                userActVector[userActs.index(sem['act'])] = 1
+
+            y_train.append(userActVector)
+
+            print y_train
 
             print "\nUSER:", label['transcription']
             print "dialog acts:", [sem['act'] for sem in label['semantics']['json']]
@@ -77,3 +107,11 @@ if __name__ == '__main__':
             print '\nVECTORS:'
             print constraintVector
             print requestVector
+
+    model = Sequential()
+    model.add(LSTM(output_dim=outputShapeLen, input_dim=inputShapeLen))
+    model.add(Dense(output_dim=outputShapeLen))
+    model.add(Activation('sigmoid'))
+    model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+
+    model.fit(X_train, y_train, batch_size=100, nb_epoch=10, validation_split=0.05)
