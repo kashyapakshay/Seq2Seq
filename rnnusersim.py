@@ -25,17 +25,17 @@ if __name__ == '__main__':
 
     contextHistory = []
 
-    for call in dataset:
+    for call in list(dataset)[:50]:
         print '\nLOG: ', call.log["session-id"], '\n'
 
         constraintVector = [0] * len(informable)
         requestVector = [0] * len(requestable)
+        userActVector = [0] * len(userActs)
 
         constraintValues = [''] * len(informable)
 
         for turn, label in call:
             machineActVector = [0] * len(machineActs)
-            userActVector = [0] * len(userActs)
             inconsistencyVector = [0] * (2 * len(informable))
 
             print '\n----'
@@ -74,13 +74,10 @@ if __name__ == '__main__':
             # Build Context Vector - concatenate all vectors
             contextVector = machineActVector + inconsistencyVector + constraintVector + requestVector
 
+            print 'CONTEXT VECTOR: ', contextVector
+
             contextHistory.append(contextVector)
             X_train.append(contextHistory)
-
-            # Encode User acts as one-hot encoding
-            for sem in label['semantics']['json']:
-                userActVector[userActs.index(sem['act'])] = 1
-
             y_train.append(userActVector)
 
             print y_train
@@ -104,6 +101,11 @@ if __name__ == '__main__':
                             # Last specified constraint value for each contraint slot
                             constraintValues[informable.index(slot[0])] = slot[1]
 
+            # Encode User acts as one-hot encoding
+            userActVector = [0] * len(userActs)
+            for sem in label['semantics']['json']:
+                userActVector[userActs.index(sem['act'])] = 1
+
             print '\nVECTORS:'
             print constraintVector
             print requestVector
@@ -112,6 +114,6 @@ if __name__ == '__main__':
     model.add(LSTM(output_dim=outputShapeLen, input_dim=inputShapeLen))
     model.add(Dense(output_dim=outputShapeLen))
     model.add(Activation('sigmoid'))
-    model.compile(loss='categorical_crossentropy', optimizer='rmsprop')
+    model.compile(loss='categorical_crossentropy', optimizer='rmsprop', measure=['accuracy'])
 
     model.fit(X_train, y_train, batch_size=100, nb_epoch=10, validation_split=0.05)
