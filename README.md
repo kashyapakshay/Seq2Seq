@@ -3,6 +3,8 @@
 An LSTM-based User Simulation Library for evaluating Statistical Dialogue Systems.
 Based on paper by Layla El Asri, Jing He, Kaheer Suleman at Maluuba Research, Montreal, Canda.
 
+Uses Kera Deep Learning library with Tensorflow backend.
+https://keras.io/
 
 **Note**: This script is meant to be used along with the DSTC2 dataset and not as a standalone.
 
