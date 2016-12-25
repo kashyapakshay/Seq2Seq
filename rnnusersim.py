@@ -5,6 +5,8 @@ from keras.models import Sequential
 from keras.layers import LSTM, Dense, Activation
 from keras.preprocessing import sequence
 
+import numpy as np
+
 if __name__ == '__main__':
     dataset = dataset_walker("dstc2_dev", dataroot="data", labels=True)
 
@@ -20,12 +22,13 @@ if __name__ == '__main__':
     inputShapeLen = 3 * len(informable) + len(requestable) + len(machineActs)
     outputShapeLen = len(userActs)
 
+    # contextHistory = []
+
     X_train = []
     y_train = []
 
-    contextHistory = []
-
     for call in list(dataset)[:50]:
+        print '\n----'
         print '\nLOG: ', call.log["session-id"], '\n'
 
         constraintVector = [0] * len(informable)
@@ -34,14 +37,14 @@ if __name__ == '__main__':
 
         constraintValues = [''] * len(informable)
 
+        contextHistory = []
+
         for turn, label in call:
             machineActVector = [0] * len(machineActs)
             inconsistencyVector = [0] * (2 * len(informable))
 
-            print '\n----'
-
-            print "\nSYSTEM:", turn['output']['transcript']
-            print "dialog acts:", [a['act'] for a in turn['output']['dialog-acts']]
+            # print "\nSYSTEM:", turn['output']['transcript']
+            # print "dialog acts:", [a['act'] for a in turn['output']['dialog-acts']]
 
             machineMentioned = []
             for act in turn['output']['dialog-acts']:
@@ -68,25 +71,18 @@ if __name__ == '__main__':
                 if inconsistencyVector[i] != 1 and inconsistencyVector[i+4] != 1 and constraintValues[i] != '':
                     constraintVector[i] = 1
 
-            print 'INCONSISTENCY: ', inconsistencyVector
-            print 'MACHINE: ', machineActVector
+            # print 'INCONSISTENCY: ', inconsistencyVector
+            # print 'MACHINE: ', machineActVector
 
             # Build Context Vector - concatenate all vectors
             contextVector = machineActVector + inconsistencyVector + constraintVector + requestVector
 
-            print 'CONTEXT VECTOR: ', contextVector
-
-            contextHistory.append(contextVector)
-            X_train.append(contextHistory)
             y_train.append(userActVector)
-
-            print y_train
-
-            print "\nUSER:", label['transcription']
-            print "dialog acts:", [sem['act'] for sem in label['semantics']['json']]
-            print "semantics:", label['semantics']['cam']
-
-            print label['semantics']['json']
+            # print "\nUSER:", label['transcription']
+            # print "dialog acts:", [sem['act'] for sem in label['semantics']['json']]
+            # print "semantics:", label['semantics']['cam']
+            #
+            # print label['semantics']['json']
 
             # Build Request Vector
             for request in label['requested-slots']:
@@ -106,14 +102,47 @@ if __name__ == '__main__':
             for sem in label['semantics']['json']:
                 userActVector[userActs.index(sem['act'])] = 1
 
-            print '\nVECTORS:'
-            print constraintVector
-            print requestVector
+            contextVectorStr = ''.join([str(x) for x in contextVector])
+            userActVectorStr = ''.join([str(x) for x in userActVector])
+
+            # print 'CONTEXT VECTOR: ', contextVectorStr
+            # print 'USER ACT VECTOR: ', userActVectorStr
+
+            # print contextHistory
+            X_train.append(contextHistory + [contextVector])
+            contextHistory.append(contextVector)
+            # print X_train
+
+            # print '\nVECTORS:'
+            # print constraintVector
+            # print requestVector
+
+    print X_train[0]
+    X_train = sequence.pad_sequences(X_train, maxlen=len(max(X_train)))[::-1]
 
     model = Sequential()
-    model.add(LSTM(output_dim=outputShapeLen, input_dim=inputShapeLen))
+    model.add(LSTM(output_dim=outputShapeLen, input_shape=(X_train.shape[1], X_train.shape[2])))
+    # model.add(Activation('sigmoid'))
     model.add(Dense(output_dim=outputShapeLen))
     model.add(Activation('sigmoid'))
-    model.compile(loss='categorical_crossentropy', optimizer='rmsprop', measure=['accuracy'])
+    model.compile(loss='categorical_crossentropy', optimizer='rmsprop', metrics=['accuracy'])
 
-    model.fit(X_train, y_train, batch_size=100, nb_epoch=10, validation_split=0.05)
+    model.fit(X_train, y_train, batch_size=50, nb_epoch=20, validation_split=0.05)
+
+    print '\nEvaluate:\n'
+
+    s = model.predict(X_train, batch_size=32)
+
+    for j in range(0, len(s)):
+        predicted = np.ndarray.tolist(s[j])
+        actual = y_train[j]
+
+        for i in range(0, len(predicted)):
+            if predicted[i] >= 0.5:
+                predicted[i] = 1
+            else:
+                predicted[i] = 0
+
+        print '\n'
+        print predicted
+        # print actual
