@@ -1,40 +1,13 @@
 from dataset_walker import dataset_walker
 from prettyPrint import prettyPrint
 
+from keras.models import Sequential
+from keras.layers import LSTM, Dense, Activation, GRU, Embedding, TimeDistributed
+from keras.preprocessing import sequence
+
 import numpy as np
 import matplotlib.pyplot as plt
 import itertools
-
-from keras.models import Sequential
-from keras.layers import LSTM, Dense, Dropout, Activation
-
-class DialogueEncoder:
-    def __init__(self):
-        self.informable = ['area', 'food', 'name', 'pricerange']
-        self.requestable = self.informable + ['addr', 'phone', 'postcode', 'signature']
-        self.machineActs = ['affirm', 'bye', 'canthear', 'confirm-domain', 'negate', 'repeat', 'reqmore',
-            'welcomemsg', 'canthelp', 'canthelp.missing_slot_value', 'canthelp.exception', 'expl-conf', 'impl-conf', 'inform',
-            'offer', 'request', 'select', 'welcomemsg']
-
-        self.userActs = ['ack', 'affirm', 'bye', 'hello', 'help', 'negate', 'null', 'repeat', 'reqalts',
-            'reqmore', 'restart', 'silence', 'thankyou', 'confirm', 'deny', 'inform', 'request']
-
-        self.inputShapeLen = 3 * len(self.informable) + len(self.requestable) + len(self.machineActs)
-        self.outputShapeLen = len(self.userActs)
-
-    def encodeUserActs(self, userActs):
-        userActVector = [0] * len(self.userActs)
-        for sem in userActs:
-            userActVector[self.userActs.index(sem)] = 1
-
-        return userActVector
-
-    def encodeMachineActs(self, machineActs):
-        machineActVector = [0] * len(self.userActs)
-        for sem in machineActs:
-            machineActVector[self.machineActs.index(sem)] = 1
-
-        return machineActVector
 
 def plot_confusion_matrix(cm, classes,
                           normalize=False,
@@ -71,38 +44,122 @@ def plot_confusion_matrix(cm, classes,
 
 if __name__ == '__main__':
     dataset = dataset_walker("dstc2_dev", dataroot="data", labels=True)
-    encoder = DialogueEncoder()
+
+    informable = ['area', 'food', 'name', 'pricerange']
+    requestable = informable + ['addr', 'phone', 'postcode', 'signature']
+    machineActs = ['affirm', 'bye', 'canthear', 'confirm-domain', 'negate', 'repeat', 'reqmore',
+        'welcomemsg', 'canthelp', 'canthelp.missing_slot_value', 'canthelp.exception', 'expl-conf', 'impl-conf', 'inform',
+        'offer', 'request', 'select', 'welcomemsg']
+
+    userActs = ['ack', 'affirm', 'bye', 'hello', 'help', 'negate', 'null', 'repeat', 'reqalts',
+        'reqmore', 'restart', 'silence', 'thankyou', 'confirm', 'deny', 'inform', 'request']
+
+    inputShapeLen = 3 * len(informable) + len(requestable) + len(machineActs)
+    outputShapeLen = len(userActs)
+
+    # contextHistory = []
 
     X_train = []
     y_train = []
 
-    blankMachineAct = encoder.encodeMachineActs([])
-
+    blankMachineAct = [0] * inputShapeLen
     for call in list(dataset):
+        dialogueHistory = [blankMachineAct, blankMachineAct]
+
         # print '\n----'
         # print '\nLOG: ', call.log["session-id"], '\n'
 
-        dialogueHistory = [blankMachineAct]
+        constraintVector = [0] * len(informable)
+        requestVector = [0] * len(requestable)
+        userActVector = [0] * len(userActs)
+
+        constraintValues = [''] * len(informable)
+
+        contextHistory = []
 
         for turn, label in call:
-            mact = encoder.encodeMachineActs([a['act'] for a in turn['output']['dialog-acts']])
-            dialogueHistory.append(mact)
-            uact = encoder.encodeUserActs([sem['act'] for sem in label['semantics']['json']])
-
-            X_train.append(dialogueHistory[-2:-1] + [mact])
-            y_train.append(uact)
+            machineActVector = [0] * len(machineActs)
+            inconsistencyVector = [0] * (2 * len(informable))
 
             # print "\nSYSTEM:", turn['output']['transcript']
             # print "dialog acts:", [a['act'] for a in turn['output']['dialog-acts']]
-            # print "Vector: ", mact
-            #
+
+            machineMentioned = []
+            for act in turn['output']['dialog-acts']:
+                # Build machine act vector
+                machineActVector[machineActs.index(act['act'])] = 1
+
+                if act['act'] == 'inform':
+                    for slot in act['slots']:
+                        # If the machine misunderstood the user specified value for constraint, set it to 0
+                        if slot[0] in informable:
+                            machineMentioned.append(slot[1])
+
+                            if constraintValues[informable.index(slot[0])] != '' and slot[1] != constraintValues[informable.index(slot[0])]:
+                                inconsistencyVector[4 + informable.index(slot[0])] = 1
+                                constraintVector[informable.index(slot[0])] = 0
+
+            for i in range(0, len(constraintValues)):
+                if constraintValues[i] != '' and constraintValues[i] != 'dontcare':
+                    if constraintValues[i] not in machineMentioned:
+                        inconsistencyVector[i] = 1
+                        constraintVector[i] = 0
+
+            for i in range(0, len(constraintValues)):
+                if inconsistencyVector[i] != 1 and inconsistencyVector[i+4] != 1 and constraintValues[i] != '':
+                    constraintVector[i] = 1
+
+            # print 'INCONSISTENCY: ', inconsistencyVector
+            # print 'MACHINE: ', machineActVector
+
+            # Build Context Vector - concatenate all vectors
+            contextVector = machineActVector + inconsistencyVector + constraintVector + requestVector
+
+            y_train.append(userActVector)
             # print "\nUSER:", label['transcription']
             # print "dialog acts:", [sem['act'] for sem in label['semantics']['json']]
             # print "semantics:", label['semantics']['cam']
-            # print "Vector: ", uact
             #
-            # print '---\n'
+            # print label['semantics']['json']
 
+            # Build Request Vector
+            for request in label['requested-slots']:
+                requestVector[requestable.index(request)] = 1
+
+            # Build Constraint Vector
+            for semantic in label['semantics']['json']:
+                if semantic['act'] == 'inform':
+                    for slot in semantic['slots']:
+                        if slot[0] in informable and slot[1] != 'dontcare':
+                            # constraintVector[informable.index(slot[0])] = 1
+                            # Last specified constraint value for each contraint slot
+                            constraintValues[informable.index(slot[0])] = slot[1]
+
+            # Encode User acts as one-hot encoding
+            userActVector = [0] * len(userActs)
+            for sem in label['semantics']['json']:
+                userActVector[userActs.index(sem['act'])] = 1
+
+            contextVectorStr = ''.join([str(x) for x in contextVector])
+            userActVectorStr = ''.join([str(x) for x in userActVector])
+
+            # print 'CONTEXT VECTOR: ', contextVectorStr
+            # print 'USER ACT VECTOR: ', userActVectorStr
+
+            # print contextHistory
+            bufferHistory = contextHistory + [contextVector]
+            # print bufferHistory[-4:-1]
+            dialogueHistory.append(contextVector)
+            X_train.append(dialogueHistory[-3:-1] + [contextVector])
+            contextHistory.append(contextVector)
+            # print X_train
+
+            # print '\nVECTORS:'
+            # print constraintVector
+            # print requestVector
+
+    # X_train = sequence.pad_sequences(X_train, maxlen=3)
+    X_train = np.array(X_train)
     x_seventy = int(0.7 * len(X_train))
     y_seventy = int(0.7 * len(y_train))
 
@@ -112,48 +169,88 @@ if __name__ == '__main__':
     X_train = X_train[:x_seventy]
     y_train = y_train[:y_seventy]
 
-    print np.array(X_train).shape
+    X_shape = np.array(X_train).shape
+    y_shape = np.array(y_train).shape
 
     model = Sequential()
-    model.add(LSTM(output_dim=encoder.outputShapeLen, input_shape=(np.array(X_train).shape[1], np.array(X_train).shape[2]), activation='sigmoid'))
-    # model.add(Dropout(0.05))
-    # model.add(Dense(output_dim=encoder.outputShapeLen))
-    # model.add(Activation('sigmoid'))
-
+    model.add(LSTM(output_dim=outputShapeLen, input_shape=(X_train.shape[1], X_train.shape[2]), activation='relu', return_sequences=True))
+    model.add(GRU(output_dim=outputShapeLen, input_shape=(X_train.shape[1], X_train.shape[2]), activation='relu', return_sequences=False))
+    model.add(Dense(output_dim=outputShapeLen, activation='softmax'))
     model.compile(loss='binary_crossentropy', optimizer='rmsprop', metrics=['accuracy'])
+
     model.fit(X_train, y_train, batch_size=16, nb_epoch=10)
 
-    score = model.evaluate(X_test, y_test, batch_size=16)
-
-    print score
+    print '\nEvaluate:\n'
 
     s = model.predict(X_test)
+    print model.evaluate(X_test, y_test, batch_size=100, verbose=1)
+
+    # EVALUATE
 
     correct = 0
     predictions = []
 
+    precision = 0.0
+    recall = 0.0
+
     # Decode predictions
 
     for j in range(0, len(s)):
-        predicted = np.ndarray.tolist(1 / (1 + np.exp(-np.array(s[j]))))
+        predicted = (1 / (1 + np.exp(-np.array(s[j]))))
+        # predicted -= np.amin(predicted)
+        # predicted = np.round(predicted, 1)
+        predicted = np.ndarray.tolist(predicted)
+
+        # predicted = s[j]
         actual = y_test[j]
 
+        localPrecision = 0.0
+        localRecall = 0.0
+
         for i in range(0, len(predicted)):
-            if predicted[i] >= 0.579:
+            if predicted[i] >= 0.58:
                 predicted[i] = 1
             else:
                 predicted[i] = 0
 
-        predictions.append(predicted)
-
         if predicted == actual:
             correct += 1
 
-        print '\n'
-        print predicted
-        print actual
+        for pos in range(len(predicted)):
+            if predicted[pos] == 1:
+                if actual[pos] == 1:
+                    localPrecision += 1
 
-    print "Acccuracy: ", (correct * 1.0 / len(s))
+        for pos in range(len(actual)):
+            if actual[pos] == 1:
+                if predicted[pos] == 1:
+                    localRecall += 1
+
+        precisionCount = predicted.count(1)
+        localPrecisionAvg = 0.0
+        if precisionCount != 0:
+            localPrecisionAvg += localPrecision / precisionCount
+
+        recallCount = actual.count(1)
+        localRecallAvg = 0.0
+        if recallCount != 0:
+            localRecallAvg = localRecall / recallCount
+
+        precision += localPrecisionAvg
+        recall += localRecallAvg
+
+        predictions.append(predicted)
+
+        print '\n'
+        print '[%d]' % (j)
+        print 'predicted: ', predicted
+        print 'actual: ', actual
+        print 'Local Precision: %f' % (localPrecisionAvg)
+        print 'Local Recall: %f' % (localRecallAvg)
+
+    print 'Accuracy: %f' % (correct * 1.0 / len(s))
+    print 'Precision: %f' % (precision / len(s))
+    print 'Recall: %f' % (recall / len(s))
 
     # Confusion Matrix
 
